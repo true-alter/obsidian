@@ -1,0 +1,130 @@
+# Commit identity trailer verification.
+#
+# ALTER commits record WHO acted and WHAT drafted or executed the work, as git
+# trailers on the commit message:
+#
+#   Acted-By:      the person who owns the decision
+#   Executed-By:   an automated agent that ran it
+#   Drafted-With:  the instrument that drafted it
+#
+# The three slots are not interchangeable. A person is accountable, a bot is
+# operated, and an instrument is used: collapsing them would let an automated
+# commit read as a human decision, which is the whole thing the trailers exist
+# to prevent. This job parses every commit in a pull request and fails when a
+# handle appears in a slot its kind may not occupy.
+#
+# Kinds are told apart syntactically: a bot handle carries a `.bot` suffix, an
+# instrument handle carries a model-provider prefix (the exact prefixes are
+# listed in the case statements below), and anything else is read as a person.
+#
+# A commit with no trailers is reported, not failed. Only a handle in the wrong
+# slot fails, because that is the case that misattributes authorship.
+#
+# Self-contained: pure bash and git, no repository scripts, no external actions
+# beyond checkout. Runs on every pull request.
+
+name: Identity Trailer Verify
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-identity-trailers:
+    name: Verify commit identity trailers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the pull request with full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Parse and verify trailers on every commit in the range
+        shell: bash
+        run: |
+          set -u
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+
+          commits=$(git log --format=%H "${base_sha}".."${head_sha}")
+          if [ -z "$commits" ]; then
+              echo "::notice::No commits in the pull request range, nothing to verify."
+              exit 0
+          fi
+
+          commit_count=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
+          fail=0
+          untrailered=0
+
+          for sha in $commits; do
+              msg=$(git show -s --format=%B "$sha")
+              trailers=$(printf '%s\n' "$msg" | git interpret-trailers --parse)
+
+              acted=$(printf '%s\n' "$trailers"   | awk -F': *' '/^Acted-By:/ {print $2}')
+              executed=$(printf '%s\n' "$trailers" | awk -F': *' '/^Executed-By:/ {print $2}')
+              drafted=$(printf '%s\n' "$trailers"  | awk -F': *' '/^Drafted-With:/ {print $2}')
+
+              # Acted-By names the accountable person. A bot or an instrument in
+              # this slot would claim a decision it cannot own.
+              while IFS= read -r h; do
+                  [ -z "$h" ] && continue
+                  case "$h" in
+                      *.bot)
+                          echo "::error::Commit ${sha}: Acted-By '${h}' is an automated agent (.bot). Acted-By names the person accountable for the change."
+                          fail=$((fail + 1))
+                          ;;
+                      ~cc-*|~gpt-*|~gemini-*|~llama-*|~claude-*|~mistral-*)
+                          echo "::error::Commit ${sha}: Acted-By '${h}' is an instrument. An instrument drafts, it does not decide. Use Drafted-With."
+                          fail=$((fail + 1))
+                          ;;
+                  esac
+              done <<< "$acted"
+
+              # Executed-By names an automated agent, so it must carry .bot.
+              while IFS= read -r h; do
+                  [ -z "$h" ] && continue
+                  case "$h" in
+                      *.bot) : ;;
+                      ~cc-*|~gpt-*|~gemini-*|~llama-*|~claude-*|~mistral-*)
+                          echo "::error::Commit ${sha}: Executed-By '${h}' is an instrument. Use Drafted-With."
+                          fail=$((fail + 1))
+                          ;;
+                      ~*)
+                          echo "::error::Commit ${sha}: Executed-By '${h}' has no .bot suffix. Executed-By names an automated agent, and the suffix is what identifies one."
+                          fail=$((fail + 1))
+                          ;;
+                  esac
+              done <<< "$executed"
+
+              # Drafted-With names the instrument used. A bot is operated, not used.
+              while IFS= read -r h; do
+                  [ -z "$h" ] && continue
+                  case "$h" in
+                      *.bot)
+                          echo "::error::Commit ${sha}: Drafted-With '${h}' is an automated agent (.bot). Use Executed-By."
+                          fail=$((fail + 1))
+                          ;;
+                  esac
+              done <<< "$drafted"
+
+              if [ -z "$acted" ] && [ -z "$executed" ] && [ -z "$drafted" ]; then
+                  untrailered=$((untrailered + 1))
+              fi
+          done
+
+          if [ "$fail" -gt 0 ]; then
+              echo "::error::Identity trailers: ${fail} handle(s) in the wrong slot across ${commit_count} commit(s). Fix the commit messages before merging."
+              exit 1
+          fi
+
+          echo "::notice::Identity trailers: ${commit_count} commit(s) checked, 0 misattributed, ${untrailered} without trailers."
+          exit 0

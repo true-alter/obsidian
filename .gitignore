@@ -1,0 +1,27 @@
+# Build artefacts
+main.js
+main.js.map
+
+# Dependencies
+node_modules/
+
+# Test output
+coverage/
+.vitest/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local plugin data
+data.json

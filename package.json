@@ -1,0 +1,29 @@
+{
+  "name": "alter-obsidian-plugin",
+  "version": "0.1.2",
+  "private": true,
+  "description": "Obsidian community plugin - pairs your vault with ~Alter",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "test": "vitest run",
+    "lint": "eslint src tests --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.0.0",
+    "obsidian": "latest",
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
+  },
+  "license": "Apache-2.0",
+  "repository": "true-alter/obsidian",
+  "dependencies": {
+    "builtin-modules": "^5.1.0"
+  }
+}
